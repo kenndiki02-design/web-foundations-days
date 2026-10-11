@@ -1,0 +1,74 @@
+:root {
+  --bg: #f5f5f7;
+  --text: #1d1d1f;
+  --card: #ffffff;
+  --border: #c7c7cc;
+  --button-bg: #0b5fff;
+  --button-text: #ffffff;
+}
+
+body.dark {
+  --bg: #121212;
+  --text: #eaeaea;
+  --card: #1e1e1e;
+  --border: #444444;
+  --button-bg: #4c8dff;
+  --button-text: #0b0b0b;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+main {
+  max-width: 600px;
+  margin: 2rem auto;
+  padding: 1.5rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+}
+
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem;
+  font: inherit;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  font: inherit;
+  cursor: pointer;
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: none;
+  border-radius: 6px;
+}
+
+.warning {
+  color: orange;
+}
+
+.over {
+  color: red;
+  font-weight: bold;
+}
