@@ -1,13 +1,117 @@
 # TicketHub Design Document
 
-TicketHub is a website that sells tickets for concerts and events. This document follows the six-part framework: **requirements, estimates, API, data model, architecture and trade-offs**. A seventh section explains in detail how the design prevents two people from buying the same seat.
+*Part 1 is the complete design on one page. Part 2 explains every section in detail.*
 
-**Summary of the key decisions**
-- A relational SQL database is the single source of truth for seats, so a seat can never be sold twice (section 4 and section 7).
-- A seat is reserved with one atomic database update, and the database refuses a second ticket for the same seat.
-- A waiting room, a CDN and a cache protect the system when 200,000 people arrive at once (section 5).
+# Part 1: The design on one page
+
+## 1. Requirements
+- **Functional:** browse events, view the seat map, hold seats for 5 minutes, pay, get tickets, see "my tickets" (max 4 per event).
+- **Non-functional:** **correctness** (no seat sold twice, no charge without a seat), **speed** (browse under 1 s, hold under 500 ms), **availability** 99.9%, **fairness** (no edge from bots or speed), durability, security.
+
+## 2. Estimates
+| | Normal day | Big sale |
+|---|---|---|
+| Requests/s | 500,000 views/day: 6 avg, 29 peak | 3,300 avg, **17,000** in minute 1 |
+| Hold attempts/s | 0.1 | 1,000 avg, 5,000 in minute 1 |
+| Tickets sold/s | 5,000/day: 0.06 | 20,000 in 10 min: 33 |
+
+Assumes half of the 200,000 arrive in minute 1, with ~10 requests and ~3 seat tries each. The sale is 580 to 2,900 times normal, with 10 people per seat. Normal days are read-heavy (100 views per ticket).
+
+## 3. API
+| Endpoint | Purpose | OK |
+|---|---|---|
+| `POST /auth/login` | sign in | 200 |
+| `GET /events`, `GET /events/{id}` | browse, details | 200 |
+| `GET /events/{id}/seats` | seat map (cached) | 200 |
+| `POST /events/{id}/queue` | join waiting room | 202 |
+| `POST /events/{id}/holds` | hold seats | 201 |
+| `POST /orders` | pay (`Idempotency-Key`) | 201 |
+| `GET /me/tickets` | my tickets | 200 |
+
+Errors: 400, 401, 402 (card declined), 403, 404, 409 (seat taken), 429, 503.
+
+## 4. Data model
+Key columns are shown here; Part 2 lists every column.
+```sql
+CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL);
+CREATE TABLE events (id INTEGER PRIMARY KEY, name TEXT NOT NULL, on_sale_at TEXT NOT NULL);
+CREATE TABLE seats (
+  id INTEGER PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  section TEXT NOT NULL,
+  row_label TEXT NOT NULL,
+  seat_number INTEGER NOT NULL,
+  price_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','held','sold')),
+  held_by_user_id INTEGER REFERENCES users(id),
+  hold_expires_at TEXT,
+  UNIQUE (event_id, section, row_label, seat_number),
+  CHECK ((status = 'held') = (held_by_user_id IS NOT NULL AND hold_expires_at IS NOT NULL)));
+CREATE TABLE orders (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  event_id INTEGER NOT NULL REFERENCES events(id),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','failed')),
+  idempotency_key TEXT NOT NULL UNIQUE);
+CREATE TABLE tickets (
+  id INTEGER PRIMARY KEY,
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  seat_id INTEGER NOT NULL UNIQUE REFERENCES seats(id));
+```
+Events have many seats, users have many orders, orders have many tickets, and a seat has at most one ticket (`UNIQUE seat_id`). Users and events are many-to-many through orders.
+
+## 5. Architecture
+```
+ Client -> DNS -+-> CDN (static files, cached event pages)
+                |
+                +-> Load Balancer + rate limit
+                          |
+                    Waiting Room (admits ~300 users/s)
+                          |
+          App Servers 1..N <--> Payment Provider
+             |        |        |
+           Cache   Primary DB  Queue -> Workers
+          (Redis)     |
+                 Read Replica
+```
+- **Client, DNS:** the browser, and the lookup that finds the site.
+- **CDN:** serves static files and event pages near the user.
+- **Load balancer:** spreads load and blocks bots with rate limits.
+- **Waiting room:** turns a spike into a steady stream.
+- **App servers:** stateless API logic that scales out.
+- **Cache:** seat maps (1 to 2 s), so the database avoids repeat reads.
+- **Primary DB:** the one source of truth for seats and orders.
+- **Read replica:** browsing reads and a failover copy.
+- **Queue and workers:** emails, ticket PDFs, expired-hold sweep.
+- **Payment provider:** takes the card (we never store cards).
+
+Surviving the sale: the CDN and cache absorb browsing, the waiting room cuts 5,000 hold attempts/s to about 900, servers are scaled up beforehand, and "sold out" is served from cache.
+
+## 6. Trade-offs
+- **5-minute holds** stop double payment but lock seats for people who never pay.
+- **Waiting room** protects the database and is fair, but adds waiting.
+- **Cached seat map** is fast but 1 to 2 s stale; the database decides, so a user may see "seat just taken".
+- **One primary DB** is simple and correct, but limits write scaling.
+
+## 7. How two people cannot buy the same seat
+Reserve a seat with one atomic statement, never SELECT then UPDATE:
+```sql
+UPDATE seats
+SET status = 'held', held_by_user_id = :user_id,
+    hold_expires_at = datetime('now', '+5 minutes')
+WHERE id = :seat_id AND event_id = :event_id
+  AND (status = 'available'
+       OR (status = 'held' AND hold_expires_at < datetime('now')));
+```
+The database locks the row, so simultaneous clicks run one after another. The first one sets `held`; for every other, the `WHERE` no longer matches, so 0 rows change and the API returns 409. Several seats are held in one transaction (`ROLLBACK` if any returns 0).
+
+To pay, one transaction sets `status = 'sold'` only `WHERE status = 'held' AND held_by_user_id = :user_id AND hold_expires_at >= datetime('now')`, then inserts the ticket. `UNIQUE (seat_id)` on `tickets` is the last safety net, and the unique `idempotency_key` stops double charges.
 
 ---
+
+# Part 2: Full detail
+
+This part expands each section of Part 1 with assumptions, calculations, examples and the complete schema.
 
 ## 1. Requirements
 
