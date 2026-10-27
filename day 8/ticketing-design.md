@@ -1,0 +1,7 @@
+# Reflection
+
+**The most difficult concept.** The hardest idea for me was how a system can be fast and correct at the same time. Caches and read replicas make reads quick, but they can show old data, and at first I could not tell where that was acceptable and where it was dangerous. I overcame it by working with numbers and small examples. Estimating traffic, such as about 46 reads and 7 writes per second for QuickNotes, showed me what really needed scaling. Asking "what problem does this component solve, and what does it cost?" for every box in a diagram made trade-offs concrete. Writing the TicketHub seat hold as a single SQL update, and testing that only one of many simultaneous requests wins, finally made transactions and constraints click.
+
+**What I would improve in my capstone.** In my QuickNotes architecture document I left some arrows off the diagram and listed them underneath, so I would draw every connection. I would also test the API client against the real service and add automated tests, and I would explain the fake-data limits of JSONPlaceholder earlier in the README so a reader is not surprised when deleted notes return.
+
+**What I will learn next.** I want to build a real backend, using Node.js with a SQL database, so the API in my design documents actually exists. After that I will learn authentication, automated testing and deployment, including load testing, so I can check my estimates instead of only calculating them.
